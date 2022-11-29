@@ -45,7 +45,10 @@ async fn main() {
     // Compose the routes
     let app = Router::new()
         .route("/", get(root))
-        .route("/api/servers", get(get_servers).post(create_server))
+        .route(
+            "/api/servers",
+            get(get_servers).post(create_server).delete(remove_server),
+        )
         // Add middleware to all routes
         .layer(
             ServiceBuilder::new()
@@ -117,6 +120,33 @@ async fn create_server(
     db.write().unwrap().insert(server.id, server.clone());
 
     (StatusCode::CREATED, Json(server))
+}
+
+#[derive(Debug, Deserialize)]
+struct RemoveServer {
+    id: Uuid,
+}
+
+async fn remove_server(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(db): State<Db>,
+    Json(input): Json<RemoveServer>,
+) -> impl IntoResponse {
+    match db.read().unwrap().get(&input.id) {
+        Some(entry) => {
+            if entry.ip != addr.ip() {
+                tracing::debug!(
+                    "request attempted to remove server but IP didn't match! UUID: {} IP: {}",
+                    input.id,
+                    addr.ip()
+                );
+                return StatusCode::NOT_FOUND;
+            }
+        }
+        None => return StatusCode::NOT_FOUND,
+    }
+    db.write().unwrap().remove(&input.id);
+    StatusCode::OK
 }
 
 type Db = Arc<RwLock<HashMap<Uuid, GameServer>>>;
