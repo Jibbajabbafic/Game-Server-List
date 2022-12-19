@@ -27,7 +27,6 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    net::IpAddr,
     net::SocketAddr,
     str,
     sync::{Arc, RwLock},
@@ -35,6 +34,7 @@ use std::{
 };
 use tower::{BoxError, ServiceBuilder};
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
+use tracing::instrument;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
@@ -118,27 +118,42 @@ async fn ws_handler(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(db): State<Db>,
 ) -> impl IntoResponse {
-    tracing::debug!("connection from IP: {}", addr.ip());
+    tracing::debug!("connection from addr: {}", addr);
     ws.protocols(["json"])
         .on_upgrade(move |socket| handle_socket(socket, addr, db))
 }
 
+#[instrument(level = "debug", name = "socket_handler", skip(socket, db))]
 async fn handle_socket(mut socket: WebSocket, addr: SocketAddr, db: Db) {
     let game_id = Uuid::new_v4();
+
     // loop until the first message is received, which should be the name
-    while let Some(Ok(Message::Text(msg))) = socket.recv().await {
-        if let Ok(GameMessage::Connect { name }) = serde_json::from_str::<GameMessage>(&msg) {
-            let server = GameServer {
-                id: game_id,
-                name,
-                ip: addr.ip(),
-                players: 0,
-            };
-            tracing::info!("created new game server: {:?}", server);
-            db.write().unwrap().insert(server.id, server);
-            break;
-        } else {
-            tracing::error!("got unknown JSON data: {:#?}", msg);
+    while let Some(Ok(msg)) = socket.recv().await {
+        match msg {
+            Message::Text(txt) => {
+                if let Ok(GameMessage::Connect { name, port }) =
+                    serde_json::from_str::<GameMessage>(&txt)
+                {
+                    let server = GameServer {
+                        id: game_id,
+                        name,
+                        addr: SocketAddr::new(addr.ip(), port),
+                        players: 0,
+                    };
+                    tracing::info!("created new game server: {:?}", server);
+                    db.write().unwrap().insert(server.id, server);
+                    break;
+                } else {
+                    tracing::error!("got unknown JSON data: {:?}", txt);
+                }
+            }
+            Message::Close(_) => {
+                tracing::debug!("connection closed: {}", addr);
+                return;
+            }
+            _ => {
+                tracing::warn!("got invalid message type: {:?}", msg)
+            }
         }
     }
 
@@ -151,6 +166,7 @@ async fn handle_socket(mut socket: WebSocket, addr: SocketAddr, db: Db) {
                         parse_game_message(&db, game_id, &t);
                     }
                     Message::Close(_) => {
+                        tracing::debug!("connection closed: {}", addr);
                         remove_server(db, game_id);
                         return;
                     }
@@ -159,6 +175,7 @@ async fn handle_socket(mut socket: WebSocket, addr: SocketAddr, db: Db) {
                     }
                 }
             } else {
+                tracing::debug!("unexpected error: {:?}", msg);
                 remove_server(db, game_id);
                 return;
             }
@@ -167,15 +184,17 @@ async fn handle_socket(mut socket: WebSocket, addr: SocketAddr, db: Db) {
 }
 
 fn remove_server(db: Db, id: Uuid) {
-    tracing::info!("client disconnected");
-    db.write().unwrap().remove(&id);
+    match db.write().unwrap().remove(&id) {
+        Some(entry) => tracing::info!("deleted game server: {:?}", entry),
+        None => tracing::error!("failed to remove game server with id: {:?}", id),
+    }
 }
 
 fn parse_game_message(db: &Db, id: Uuid, msg: &str) {
     if let Ok(json) = serde_json::from_str::<GameMessage>(msg) {
         match json {
-            GameMessage::Connect { name } => {
-                tracing::info!("new game connected with name: {}", name)
+            GameMessage::Connect { name, port } => {
+                tracing::info!("new game connected with name: {} port: {}", name, port)
             }
             GameMessage::Status { players } => {
                 db.write().unwrap().entry(id).and_modify(|game_server| {
@@ -195,13 +214,13 @@ type Db = Arc<RwLock<HashMap<Uuid, GameServer>>>;
 struct GameServer {
     id: Uuid,
     name: String,
-    ip: IpAddr,
+    addr: SocketAddr,
     players: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 enum GameMessage {
-    Connect { name: String },
+    Connect { name: String, port: u16 },
     Status { players: u32 },
 }
