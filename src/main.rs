@@ -27,7 +27,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     str,
     sync::{Arc, RwLock},
     time::Duration,
@@ -137,7 +137,8 @@ async fn handle_socket(mut socket: WebSocket, addr: SocketAddr, db: Db) {
                     let server = GameServer {
                         id: game_id,
                         name,
-                        addr: SocketAddr::new(addr.ip(), port),
+                        ip: addr.ip(),
+                        port,
                         players: 0,
                     };
                     tracing::info!("created new game server: {:?}", server);
@@ -214,7 +215,8 @@ type Db = Arc<RwLock<HashMap<Uuid, GameServer>>>;
 struct GameServer {
     id: Uuid,
     name: String,
-    addr: SocketAddr,
+    ip: IpAddr,
+    port: u16,
     players: u32,
 }
 
