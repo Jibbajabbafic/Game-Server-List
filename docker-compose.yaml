@@ -1,0 +1,9 @@
+version: "3.8"
+
+services:
+  game-server-list:
+    build: .
+    ports:
+      - "80:3000"
+    tty: true
+    container_name: game-server-list
