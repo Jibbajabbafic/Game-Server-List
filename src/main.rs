@@ -17,7 +17,7 @@ use axum::{
     error_handling::HandleErrorLayer,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        ConnectInfo, Query, State,
+        ConnectInfo, Host, Query, State,
     },
     http::StatusCode,
     response::IntoResponse,
@@ -25,7 +25,10 @@ use axum::{
     Json, Router,
 };
 use godot_server_list::{GameMessage, GameServer, Pagination, ServerList};
-use std::{net::SocketAddr, str, time::Duration};
+use std::{
+    net::{IpAddr, SocketAddr},
+    time::Duration,
+};
 use tower::{BoxError, ServiceBuilder};
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing::instrument;
@@ -93,15 +96,21 @@ async fn get_servers(
 async fn ws_handler(
     ws: WebSocketUpgrade,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    host: Host,
     State(server_list): State<ServerList>,
 ) -> impl IntoResponse {
     tracing::debug!("connection from addr: {}", addr);
     ws.protocols(["json"])
-        .on_upgrade(move |socket| handle_socket(socket, addr, server_list))
+        .on_upgrade(move |socket| handle_socket(socket, addr, host, server_list))
 }
 
 #[instrument(level = "debug", name = "socket_handler", skip(socket, server_list))]
-async fn handle_socket(mut socket: WebSocket, addr: SocketAddr, mut server_list: ServerList) {
+async fn handle_socket(
+    mut socket: WebSocket,
+    addr: SocketAddr,
+    host: Host,
+    mut server_list: ServerList,
+) {
     let mut game_id = Uuid::nil();
 
     // loop until the first message is received, which should be the name
@@ -111,7 +120,9 @@ async fn handle_socket(mut socket: WebSocket, addr: SocketAddr, mut server_list:
                 if let Ok(GameMessage::Connect { name, port }) =
                     serde_json::from_str::<GameMessage>(&txt)
                 {
-                    let server = GameServer::new(name, addr.ip(), port);
+                    // The addr might be a local one so check it and parse the external one
+                    let ip = parse_external_ip(addr.ip(), host);
+                    let server = GameServer::new(name, ip, port);
                     tracing::info!("created new game server: {:?}", server);
                     game_id = server_list.add(server);
                     break;
@@ -154,6 +165,22 @@ async fn handle_socket(mut socket: WebSocket, addr: SocketAddr, mut server_list:
             }
         }
     }
+}
+
+fn parse_external_ip(ip: IpAddr, host: Host) -> IpAddr {
+    if let IpAddr::V4(ipv4) = ip {
+        if ipv4.is_private() {
+            // This is a local address so it's on the same host
+            // Replace the ip with the request's 'host' header instead so external users can connect
+            match host.0.parse::<IpAddr>() {
+                Ok(host) => return host,
+                Err(e) => {
+                    tracing::error!("error parsing host ip header: {:?}", e);
+                }
+            }
+        }
+    }
+    ip
 }
 
 fn remove_server(mut server_list: ServerList, game_id: &Uuid) {
