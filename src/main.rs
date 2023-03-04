@@ -1,4 +1,4 @@
-//! Provides a RESTful web server managing Game Servers.
+//! Provides a RESTful web server for listing active game servers.
 //!
 //! Uses websockets to connect game servers and update their state.
 //!
@@ -17,13 +17,14 @@ use axum::{
     error_handling::HandleErrorLayer,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        ConnectInfo, Query, State,
+        Query, State,
     },
     http::StatusCode,
     response::IntoResponse,
     routing::get,
     Json, Router,
 };
+use axum_client_ip::{SecureClientIp, SecureClientIpSource};
 use godot_server_list::{GameMessage, GameServer, Pagination, ServerList};
 use std::{
     net::{IpAddr, SocketAddr},
@@ -35,7 +36,18 @@ use tracing::instrument;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
-// Shared app state
+// env config with defaults
+#[derive(serde::Deserialize, Debug)]
+struct Config {
+    #[serde(default = "default_ip_source")]
+    ip_source: SecureClientIpSource,
+}
+
+fn default_ip_source() -> SecureClientIpSource {
+    SecureClientIpSource::ConnectInfo
+}
+
+// shared app state
 #[derive(Clone)]
 struct AppState {
     server_list: ServerList,
@@ -44,6 +56,7 @@ struct AppState {
 
 #[tokio::main]
 async fn main() {
+    // enable logging
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -52,6 +65,11 @@ async fn main() {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    // get config from env
+    let config: Config = envy::from_env().unwrap();
+    tracing::debug!("env config: {:?}", config);
+
+    // determine server's public ip for local servers
     let server_ip = match public_ip::addr().await {
         Some(ip) => {
             tracing::debug!("found server's public ip: {}", ip);
@@ -70,6 +88,8 @@ async fn main() {
         .route("/api/servers", get(get_servers))
         // websocket route
         .route("/api/servers/ws", get(ws_handler))
+        // determine the secure ip source from the env
+        .layer(config.ip_source.into_extension())
         // logging so we can see whats going on
         .layer(
             TraceLayer::new_for_http()
@@ -113,19 +133,19 @@ async fn get_servers(
 
 async fn ws_handler(
     ws: WebSocketUpgrade,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    SecureClientIp(ip): SecureClientIp,
     State(app_state): State<AppState>,
 ) -> impl IntoResponse {
-    tracing::debug!("connection from addr: {}", addr);
+    tracing::debug!("new connection from: {}", ip);
     ws.protocols(["json"]).on_upgrade(move |socket| {
-        handle_socket(socket, addr, app_state.server_list, app_state.server_ip)
+        handle_socket(socket, ip, app_state.server_list, app_state.server_ip)
     })
 }
 
 #[instrument(level = "debug", name = "socket_handler", skip(socket, server_list))]
 async fn handle_socket(
     mut socket: WebSocket,
-    addr: SocketAddr,
+    ip: IpAddr,
     mut server_list: ServerList,
     server_ip: IpAddr,
 ) {
@@ -138,13 +158,9 @@ async fn handle_socket(
                 if let Ok(GameMessage::Connect { name, port }) =
                     serde_json::from_str::<GameMessage>(&txt)
                 {
-                    // If this IP is local then it's on the same host so
+                    // if this IP is local then it's on the same host so
                     // replace the it with the server's public IP
-                    let ip = if is_local_ipv4(addr.ip()) {
-                        server_ip
-                    } else {
-                        addr.ip()
-                    };
+                    let ip = if is_local_ipv4(ip) { server_ip } else { ip };
 
                     let server = GameServer::new(name, ip, port);
                     tracing::info!("created new game server: {:?}", server);
@@ -155,7 +171,7 @@ async fn handle_socket(
                 }
             }
             Message::Close(_) => {
-                tracing::debug!("connection closed: {}", addr);
+                tracing::debug!("connection closed: {}", ip);
                 return;
             }
             _ => {
@@ -174,7 +190,7 @@ async fn handle_socket(
                         parse_game_message(&server_list, &game_id, &t);
                     }
                     Message::Close(_) => {
-                        tracing::debug!("connection closed: {}", addr);
+                        tracing::debug!("connection closed: {}", ip);
                         remove_server(server_list, &game_id);
                         return;
                     }
