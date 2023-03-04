@@ -25,7 +25,7 @@ use axum::{
     Json, Router,
 };
 use axum_client_ip::{SecureClientIp, SecureClientIpSource};
-use godot_server_list::{GameMessage, GameServer, Pagination, ServerList};
+use game_server_list::{GameMessage, GameServer, Pagination, ServerList};
 use std::{
     net::{IpAddr, SocketAddr},
     time::Duration,
@@ -60,7 +60,7 @@ async fn main() {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "godot_server_list=debug,tower_http=debug".into()),
+                .unwrap_or_else(|_| "game_server_list=debug,tower_http=debug".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
