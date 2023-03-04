@@ -193,9 +193,9 @@ async fn handle_socket(
 
 fn is_local_ipv4(ip: IpAddr) -> bool {
     if let IpAddr::V4(ipv4) = ip {
-        return !ipv4.is_private();
+        return ipv4.is_private();
     }
-    return true;
+    return false;
 }
 
 fn remove_server(mut server_list: ServerList, game_id: &Uuid) {
