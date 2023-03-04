@@ -17,7 +17,7 @@ use axum::{
     error_handling::HandleErrorLayer,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        ConnectInfo, Host, Query, State,
+        ConnectInfo, Query, State,
     },
     http::StatusCode,
     response::IntoResponse,
@@ -35,6 +35,13 @@ use tracing::instrument;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
+// Shared app state
+#[derive(Clone)]
+struct AppState {
+    server_list: ServerList,
+    server_ip: IpAddr,
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::registry()
@@ -45,7 +52,18 @@ async fn main() {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let server_list = ServerList::new();
+    let server_ip = match public_ip::addr().await {
+        Some(ip) => {
+            tracing::debug!("found server's public ip: {}", ip);
+            ip
+        }
+        None => panic!("unable to find server's public ip address, please make sure it has a connection to the internet"),
+    };
+
+    let app_state = AppState {
+        server_list: ServerList::new(),
+        server_ip,
+    };
 
     // build our application with some routes
     let app = Router::new()
@@ -74,7 +92,7 @@ async fn main() {
                 .layer(TraceLayer::new_for_http())
                 .into_inner(),
         )
-        .with_state(server_list);
+        .with_state(app_state);
 
     // run the server
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
@@ -87,29 +105,29 @@ async fn main() {
 
 async fn get_servers(
     pagination: Option<Query<Pagination>>,
-    State(server_list): State<ServerList>,
+    State(app_state): State<AppState>,
 ) -> impl IntoResponse {
     let Query(pagination) = pagination.unwrap_or_default();
-    Json(server_list.get(&pagination))
+    Json(app_state.server_list.get(&pagination))
 }
 
 async fn ws_handler(
     ws: WebSocketUpgrade,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    host: Host,
-    State(server_list): State<ServerList>,
+    State(app_state): State<AppState>,
 ) -> impl IntoResponse {
     tracing::debug!("connection from addr: {}", addr);
-    ws.protocols(["json"])
-        .on_upgrade(move |socket| handle_socket(socket, addr, host, server_list))
+    ws.protocols(["json"]).on_upgrade(move |socket| {
+        handle_socket(socket, addr, app_state.server_list, app_state.server_ip)
+    })
 }
 
 #[instrument(level = "debug", name = "socket_handler", skip(socket, server_list))]
 async fn handle_socket(
     mut socket: WebSocket,
     addr: SocketAddr,
-    host: Host,
     mut server_list: ServerList,
+    server_ip: IpAddr,
 ) {
     let mut game_id = Uuid::nil();
 
@@ -120,8 +138,14 @@ async fn handle_socket(
                 if let Ok(GameMessage::Connect { name, port }) =
                     serde_json::from_str::<GameMessage>(&txt)
                 {
-                    // The addr might be a local one so check it and parse the external one
-                    let ip = parse_external_ip(addr.ip(), host);
+                    // If this IP is local then it's on the same host so
+                    // replace the it with the server's public IP
+                    let ip = if is_local_ipv4(addr.ip()) {
+                        server_ip
+                    } else {
+                        addr.ip()
+                    };
+
                     let server = GameServer::new(name, ip, port);
                     tracing::info!("created new game server: {:?}", server);
                     game_id = server_list.add(server);
@@ -167,20 +191,11 @@ async fn handle_socket(
     }
 }
 
-fn parse_external_ip(ip: IpAddr, host: Host) -> IpAddr {
+fn is_local_ipv4(ip: IpAddr) -> bool {
     if let IpAddr::V4(ipv4) = ip {
-        if ipv4.is_private() {
-            // This is a local address so it's on the same host
-            // Replace the ip with the request's 'host' header instead so external users can connect
-            match host.0.parse::<IpAddr>() {
-                Ok(host) => return host,
-                Err(e) => {
-                    tracing::error!("error parsing host ip header: {:?}", e);
-                }
-            }
-        }
+        return !ipv4.is_private();
     }
-    ip
+    return true;
 }
 
 fn remove_server(mut server_list: ServerList, game_id: &Uuid) {
