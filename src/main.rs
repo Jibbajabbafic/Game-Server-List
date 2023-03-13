@@ -4,8 +4,8 @@
 //!
 //! API will be:
 //!
-//! - `GET /api/servers`: return a JSON list of servers.
-//! - `WS /api/servers/ws`: connect a game server and update it's state.
+//! - `GET /api/list/servers`: return a JSON list of servers.
+//! - `WS /api/list/ws`: connect a game server and update it's state.
 //!
 //! Run with
 //!
@@ -85,9 +85,9 @@ async fn main() {
 
     // build our application with some routes
     let app = Router::new()
-        .route("/api/servers", get(get_servers))
+        .route("/api/list/servers", get(get_servers))
         // websocket route
-        .route("/api/servers/ws", get(ws_handler))
+        .route("/api/list/ws", get(ws_handler))
         // determine the secure ip source from the env
         .layer(config.ip_source.into_extension())
         // logging so we can see whats going on
