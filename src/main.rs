@@ -153,16 +153,17 @@ async fn handle_socket(
 
     // loop until the first message is received, which should be the name
     while let Some(Ok(msg)) = socket.recv().await {
+        tracing::debug!("got msg: {:?}", msg);
         match msg {
             Message::Text(txt) => {
-                if let Ok(GameMessage::Connect { name, port }) =
+                if let Ok(GameMessage::Connect { name, tls, port }) =
                     serde_json::from_str::<GameMessage>(&txt)
                 {
                     // if this IP is local then it's on the same host so
                     // replace the it with the server's public IP
                     let ip = if is_local_ipv4(ip) { server_ip } else { ip };
 
-                    let server = GameServer::new(name, ip, port);
+                    let server = GameServer::new(name, ip, tls, port);
                     tracing::info!("created new game server: {:?}", server);
                     game_id = server_list.add(server);
                     break;
@@ -224,8 +225,13 @@ fn remove_server(mut server_list: ServerList, game_id: &Uuid) {
 fn parse_game_message(server_list: &ServerList, server_id: &Uuid, msg: &str) {
     if let Ok(json) = serde_json::from_str::<GameMessage>(msg) {
         match json {
-            GameMessage::Connect { name, port } => {
-                tracing::info!("new game connected with name: {} port: {}", name, port)
+            GameMessage::Connect { name, tls, port } => {
+                tracing::info!(
+                    "new game connected with name: {} tls: {} port: {}",
+                    name,
+                    tls,
+                    port
+                )
             }
             GameMessage::Status { players } => {
                 server_list.update(server_id, |game_server| {

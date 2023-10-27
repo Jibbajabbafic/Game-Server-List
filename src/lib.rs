@@ -10,15 +10,17 @@ use uuid::Uuid;
 pub struct GameServer {
     name: String,
     ip: IpAddr,
+    tls: bool,
     port: u16,
     pub players: u32,
 }
 
 impl GameServer {
-    pub fn new(name: String, ip: IpAddr, port: u16) -> GameServer {
+    pub fn new(name: String, ip: IpAddr, tls: bool, port: u16) -> GameServer {
         GameServer {
             name,
             ip,
+            tls,
             port,
             players: 0,
         }
@@ -28,7 +30,7 @@ impl GameServer {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum GameMessage {
-    Connect { name: String, port: u16 },
+    Connect { name: String, tls: bool, port: u16 },
     Status { players: u32 },
 }
 
@@ -110,6 +112,7 @@ mod tests {
         let server = GameServer::new(
             String::from("Test"),
             IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            false,
             12345,
         );
         let mut server_list = ServerList::new();
@@ -123,6 +126,7 @@ mod tests {
         let server = GameServer::new(
             String::from("Test"),
             IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            false,
             12345,
         );
         let mut server_list = ServerList::new();
@@ -137,6 +141,7 @@ mod tests {
         let server = GameServer::new(
             String::from("Test"),
             IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            false,
             12345,
         );
         let expected = server.clone();
@@ -152,6 +157,7 @@ mod tests {
         let server = GameServer::new(
             String::from("Test"),
             IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            false,
             12345,
         );
         let mut server_list = ServerList::new();
