@@ -161,9 +161,15 @@ async fn handle_socket(
                 {
                     // if this IP is local then it's on the same host so
                     // replace the it with the server's public IP
-                    let ip = if is_local_ipv4(ip) { server_ip } else { ip };
+                    let mut official = false;
+                    let ip = if is_local_ipv4(ip) {
+                        official = true;
+                        server_ip
+                    } else {
+                        ip
+                    };
 
-                    let server = GameServer::new(name, ip, tls, port);
+                    let server = GameServer::new(name, ip, tls, port, official);
                     tracing::info!("created new game server: {:?}", server);
                     game_id = server_list.add(server);
                     break;

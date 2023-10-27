@@ -12,16 +12,18 @@ pub struct GameServer {
     ip: IpAddr,
     tls: bool,
     port: u16,
+    official: bool,
     pub players: u32,
 }
 
 impl GameServer {
-    pub fn new(name: String, ip: IpAddr, tls: bool, port: u16) -> GameServer {
+    pub fn new(name: String, ip: IpAddr, tls: bool, port: u16, official: bool) -> GameServer {
         GameServer {
             name,
             ip,
             tls,
             port,
+            official,
             players: 0,
         }
     }
@@ -114,6 +116,7 @@ mod tests {
             IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
             false,
             12345,
+            false,
         );
         let mut server_list = ServerList::new();
         assert_eq!(server_list.len(), 0);
@@ -128,6 +131,7 @@ mod tests {
             IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
             false,
             12345,
+            false,
         );
         let mut server_list = ServerList::new();
         let uuid = server_list.add(server);
@@ -143,6 +147,7 @@ mod tests {
             IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
             false,
             12345,
+            false,
         );
         let expected = server.clone();
         let mut server_list = ServerList::new();
@@ -159,6 +164,7 @@ mod tests {
             IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
             false,
             12345,
+            false,
         );
         let mut server_list = ServerList::new();
         let server_id = server_list.add(server);
