@@ -17,5 +17,12 @@ RUN cargo build --release
 # We do not need the Rust toolchain to run the binary!
 FROM debian:bullseye-slim AS runtime
 WORKDIR /app
+
+# Install curl for healthcheck
+RUN apt update && apt install -y curl
+
+HEALTHCHECK --interval=1m --timeout=10s --retries=3 --start-period=1m \
+    CMD curl --fail localhost:3000/api/list/servers || exit 1
+
 COPY --from=builder /app/target/release/game_server_list /usr/local/bin
 ENTRYPOINT ["/usr/local/bin/game_server_list"]
