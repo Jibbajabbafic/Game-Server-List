@@ -25,7 +25,7 @@ use axum::{
     Json, Router,
 };
 use axum_client_ip::{SecureClientIp, SecureClientIpSource};
-use game_server_list::{GameMessage, GameServer, Pagination, ServerList};
+use game_server_list::{ConnectMessage, GameMessage, GameServer, Pagination, ServerList};
 use std::{
     net::{IpAddr, SocketAddr},
     time::Duration,
@@ -155,28 +155,15 @@ async fn handle_socket(
     while let Some(Ok(msg)) = socket.recv().await {
         tracing::debug!("got msg: {:?}", msg);
         match msg {
-            Message::Text(txt) => {
-                if let Ok(GameMessage::Connect { name, tls, port }) =
-                    serde_json::from_str::<GameMessage>(&txt)
-                {
-                    // if this IP is local then it's on the same host so
-                    // replace the it with the server's public IP
-                    let mut official = false;
-                    let ip = if is_local_ipv4(ip) {
-                        official = true;
-                        server_ip
-                    } else {
-                        ip
-                    };
-
-                    let server = GameServer::new(name, ip, tls, port, official);
+            Message::Text(txt) => match parse_connect_message(txt, ip, server_ip) {
+                Ok(server) => {
                     tracing::info!("created new game server: {:?}", server);
                     game_id = server_list.add(server);
-                    break;
-                } else {
-                    tracing::error!("got unknown JSON data: {:?}", txt);
                 }
-            }
+                Err(e) => {
+                    tracing::error!(e);
+                }
+            },
             Message::Close(_) => {
                 tracing::debug!("connection closed: {}", ip);
                 return;
@@ -228,17 +215,49 @@ fn remove_server(mut server_list: ServerList, game_id: &Uuid) {
     }
 }
 
-fn parse_game_message(server_list: &ServerList, server_id: &Uuid, msg: &str) {
-    if let Ok(json) = serde_json::from_str::<GameMessage>(msg) {
-        match json {
-            GameMessage::Connect { name, tls, port } => {
-                tracing::info!(
-                    "new game connected with name: {} tls: {} port: {}",
+fn parse_connect_message(txt: String, ip: IpAddr, server_ip: IpAddr) -> Result<GameServer, String> {
+    if let Ok(msg) = serde_json::from_str::<ConnectMessage>(&txt) {
+        match msg {
+            ConnectMessage::V1 { name, port } => {
+                tracing::debug!("new game connected with V1 name: {} port: {}", name, port);
+                // if this IP is local then it's on the same host so
+                // replace the it with the server's public IP
+                let mut official = false;
+                let ip = if is_local_ipv4(ip) {
+                    official = true;
+                    server_ip
+                } else {
+                    ip
+                };
+
+                return Ok(GameServer::new(name, ip, false, port, official));
+            }
+            ConnectMessage::V2 { name, tls, port } => {
+                tracing::debug!(
+                    "new game connected with V2 name: {} tls: {} port: {}",
                     name,
                     tls,
                     port
-                )
+                );
+                // if this IP is local then it's on the same host so
+                // replace the it with the server's public IP
+                let mut official = false;
+                let ip = if is_local_ipv4(ip) {
+                    official = true;
+                    server_ip
+                } else {
+                    ip
+                };
+                return Ok(GameServer::new(name, ip, tls, port, official));
             }
+        }
+    }
+    Err(format!("got unknown JSON data: {:?}", txt))
+}
+
+fn parse_game_message(server_list: &ServerList, server_id: &Uuid, msg: &str) {
+    if let Ok(json) = serde_json::from_str::<GameMessage>(msg) {
+        match json {
             GameMessage::Status { players } => {
                 server_list.update(server_id, |game_server| {
                     game_server.players = players;
@@ -248,5 +267,116 @@ fn parse_game_message(server_list: &ServerList, server_id: &Uuid, msg: &str) {
         }
     } else {
         tracing::error!("got unknown JSON data: {:#?}", msg);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+
+    #[test]
+    fn parse_connect_message_v2() {
+        let txt = "{\"name\":\"Test's Game\",\"port\":31400,\"tls\":true}".to_string();
+        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let server_ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let expected_server = GameServer::new(
+            String::from("Test's Game"),
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            true,
+            31400,
+            false,
+        );
+        let result: Result<GameServer, String> = parse_connect_message(txt, ip, server_ip);
+        assert_eq!(result, Ok(expected_server));
+    }
+
+    #[test]
+    fn parse_connect_message_v2_reverse_order() {
+        let txt = "{\"tls\":true, \"port\":31400, \"name\":\"Test's Game\"}".to_string();
+        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let server_ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let expected_server = GameServer::new(
+            String::from("Test's Game"),
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            true,
+            31400,
+            false,
+        );
+        let result: Result<GameServer, String> = parse_connect_message(txt, ip, server_ip);
+        assert_eq!(result, Ok(expected_server));
+    }
+
+    #[test]
+    fn parse_connect_message_v2_official() {
+        let txt = "{\"name\":\"Another Game\",\"port\":65535,\"tls\":true}".to_string();
+        let ip = IpAddr::V4(Ipv4Addr::new(192, 168, 0, 123));
+        let server_ip = IpAddr::V4(Ipv4Addr::new(192, 168, 0, 123));
+        let expected_server = GameServer::new(
+            String::from("Another Game"),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 0, 123)),
+            true,
+            65535,
+            true,
+        );
+        let result: Result<GameServer, String> = parse_connect_message(txt, ip, server_ip);
+        assert_eq!(result, Ok(expected_server));
+    }
+
+    #[test]
+    fn parse_connect_message_v1() {
+        let txt = "{\"name\":\"Test\",\"port\":12345}".to_string();
+        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let server_ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let expected_server = GameServer::new(
+            String::from("Test"),
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            false,
+            12345,
+            false,
+        );
+        let result: Result<GameServer, String> = parse_connect_message(txt, ip, server_ip);
+        assert_eq!(result, Ok(expected_server));
+    }
+
+    #[test]
+    fn parse_connect_message_v1_reverse_order() {
+        let txt = "{\"port\":12345, \"name\":\"Test\"}".to_string();
+        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let server_ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let expected_server = GameServer::new(
+            String::from("Test"),
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            false,
+            12345,
+            false,
+        );
+        let result: Result<GameServer, String> = parse_connect_message(txt, ip, server_ip);
+        assert_eq!(result, Ok(expected_server));
+    }
+
+    #[test]
+    fn parse_connect_message_v1_official() {
+        let txt = "{\"name\":\"Test\",\"port\":12345}".to_string();
+        let ip = IpAddr::V4(Ipv4Addr::new(172, 16, 0, 22));
+        let server_ip = IpAddr::V4(Ipv4Addr::new(172, 16, 0, 22));
+        let expected_server = GameServer::new(
+            String::from("Test"),
+            IpAddr::V4(Ipv4Addr::new(172, 16, 0, 22)),
+            false,
+            12345,
+            true,
+        );
+        let result: Result<GameServer, String> = parse_connect_message(txt, ip, server_ip);
+        assert_eq!(result, Ok(expected_server));
+    }
+
+    #[test]
+    fn parse_connect_message_unknown() {
+        let txt = "{\"wasd\":\"Test\",\"port\":12345,\"asdoasdoaisd\":59912}".to_string();
+        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let server_ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let result: Result<GameServer, String> = parse_connect_message(txt, ip, server_ip);
+        assert!(result.is_err());
     }
 }

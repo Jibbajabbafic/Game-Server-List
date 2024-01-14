@@ -29,10 +29,17 @@ impl GameServer {
     }
 }
 
+// IMPORTANT: Add new versions to the top so they take precedence when JSON is parsed
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ConnectMessage {
+    V2 { name: String, port: u16, tls: bool },
+    V1 { name: String, port: u16 },
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum GameMessage {
-    Connect { name: String, tls: bool, port: u16 },
     Status { players: u32 },
 }
 
