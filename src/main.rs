@@ -2,10 +2,11 @@
 //!
 //! Uses websockets to connect game servers and update their state.
 //!
-//! API will be:
-//!
+//! API is:
 //! - `GET /api/list/servers`: return a JSON list of servers.
 //! - `WS /api/list/ws`: connect a game server and update it's state.
+//!
+//! See README for more details.
 //!
 //! Run with
 //!
