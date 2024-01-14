@@ -7,6 +7,8 @@ WebSocket connections.
 
 Originally written for the open source game
 [Flappy Race](https://github.com/Jibby-Games/Flappy-Race).
+Used as part of the [Flappy Backend repo](https://github.com/Jibby-Games/Flappy-Backend) which
+contains other microservices for the game.
 
 ## Features
 - Automatically detects IP addresses of new game servers to stop them spoofing their IP.
