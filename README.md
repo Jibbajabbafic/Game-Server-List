@@ -1,9 +1,9 @@
 # Game Server List - Generic Server Browser API
 
-This repo contains a generic game server list written in Rust which can be used as an API for
-in-game server browsers. Uses WebSockets to connect new game servers and update their state in real
-time. This should work with any game engine as long as it's able to send HTTP requests and start
-WebSocket connections.
+This repo contains a generic game server list written in Rust with the Axum framework which can be
+used as an API for in-game server browsers. Uses WebSockets to connect new game servers and update
+their state in real time. This should work with any game engine as long as it's able to send HTTP
+requests and start WebSocket connections.
 
 Originally written for the open source game
 [Flappy Race](https://github.com/Jibby-Games/Flappy-Race).
