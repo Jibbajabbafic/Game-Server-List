@@ -1,5 +1,5 @@
 # Use cargo chef to speed up builds
-FROM lukemathwalker/cargo-chef:0.1.51-rust-1.67.1-slim-bullseye AS chef
+FROM lukemathwalker/cargo-chef:0.1.62-rust-1.75-slim-bullseye AS chef
 WORKDIR /app
 
 FROM chef AS planner
