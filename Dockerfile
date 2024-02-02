@@ -22,7 +22,7 @@ WORKDIR /app
 RUN apt update && apt install -y curl
 
 HEALTHCHECK --interval=1m --timeout=10s --retries=3 --start-period=1m \
-    CMD curl --fail localhost:3000/api/list/servers || exit 1
+    CMD curl --fail localhost:3000/api/list/healthcheck || exit 1
 
 COPY --from=builder /app/target/release/game_server_list /usr/local/bin
 ENTRYPOINT ["/usr/local/bin/game_server_list"]

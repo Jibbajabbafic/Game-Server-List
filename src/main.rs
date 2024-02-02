@@ -86,6 +86,7 @@ async fn main() {
 
     // build our application with some routes
     let app = Router::new()
+        .route("/api/list/healthcheck", get(healthcheck))
         .route("/api/list/servers", get(get_servers))
         // websocket route
         .route("/api/list/ws", get(websocket_handler))
@@ -117,6 +118,11 @@ async fn main() {
         .serve(app.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .unwrap();
+}
+
+// Added for Docker healthcheck to ensure server still responding
+async fn healthcheck() -> &'static str {
+    "Success!"
 }
 
 #[instrument(skip(app_state))]
