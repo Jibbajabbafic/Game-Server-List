@@ -27,6 +27,8 @@ use axum::{
 };
 use axum_client_ip::{SecureClientIp, SecureClientIpSource};
 use game_server_list::{ConnectMessage, GameMessage, GameServer, Pagination, ServerList};
+use lazy_static::lazy_static;
+use prometheus::{IntCounter, IntGauge, Registry};
 use std::{
     net::{IpAddr, SocketAddr},
     time::Duration,
@@ -36,6 +38,33 @@ use tower_http::trace::TraceLayer;
 use tracing::instrument;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
+
+// define prometheus metrics
+lazy_static! {
+    pub static ref REGISTRY: Registry = Registry::new();
+    pub static ref SERVER_LIST_REQUESTS: IntCounter =
+        IntCounter::new("server_list_requests", "Server List Requests")
+            .expect("metric can be created");
+    pub static ref CONNECTED_GAME_SERVERS: IntGauge =
+        IntGauge::new("connected_game_servers", "Connected Game Servers")
+            .expect("metric can be created");
+    pub static ref IN_GAME_PLAYERS: IntGauge =
+        IntGauge::new("in_game_players", "In Game Players").expect("metric can be created");
+}
+
+fn register_custom_metrics() {
+    REGISTRY
+        .register(Box::new(SERVER_LIST_REQUESTS.clone()))
+        .expect("collector can be registered");
+
+    REGISTRY
+        .register(Box::new(CONNECTED_GAME_SERVERS.clone()))
+        .expect("collector can be registered");
+
+    REGISTRY
+        .register(Box::new(IN_GAME_PLAYERS.clone()))
+        .expect("collector can be registered");
+}
 
 // env config with defaults
 #[derive(serde::Deserialize, Debug)]
@@ -66,6 +95,9 @@ async fn main() {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    // create prometheus metrics
+    register_custom_metrics();
+
     // get config from env
     let config: Config = envy::from_env().unwrap();
     tracing::info!("env config: {:?}", config);
@@ -90,6 +122,8 @@ async fn main() {
         .route("/api/list/servers", get(get_servers))
         // websocket route
         .route("/api/list/ws", get(websocket_handler))
+        // keep metrics on root so proxy doesn't expose it
+        .route("/metrics", get(get_metrics))
         // determine the secure ip source from the env
         .layer(config.ip_source.into_extension())
         // add default services for error handling, timeout and tracing
@@ -125,6 +159,7 @@ async fn healthcheck() -> &'static str {
     "Success!"
 }
 
+/// Returns the server list with all games on it
 #[instrument(skip(app_state))]
 async fn get_servers(
     pagination: Option<Query<Pagination>>,
@@ -132,8 +167,46 @@ async fn get_servers(
     State(app_state): State<AppState>,
 ) -> impl IntoResponse {
     tracing::info!("sending server list");
+    SERVER_LIST_REQUESTS.inc();
     let Query(pagination) = pagination.unwrap_or_default();
     Json(app_state.server_list.get(&pagination))
+}
+
+/// Returns prometheus metrics
+async fn get_metrics() -> impl IntoResponse {
+    use prometheus::Encoder;
+    let encoder = prometheus::TextEncoder::new();
+
+    // encode custom metrics
+    let mut buffer = Vec::new();
+    if let Err(e) = encoder.encode(&REGISTRY.gather(), &mut buffer) {
+        eprintln!("could not encode custom metrics: {}", e);
+    };
+    let mut res = match String::from_utf8(buffer.clone()) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("custom metrics could not be from_utf8'd: {}", e);
+            String::default()
+        }
+    };
+    buffer.clear();
+
+    // encode default metrics
+    let mut buffer = Vec::new();
+    if let Err(e) = encoder.encode(&prometheus::gather(), &mut buffer) {
+        eprintln!("could not encode prometheus metrics: {}", e);
+    };
+    let res_custom = match String::from_utf8(buffer.clone()) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("prometheus metrics could not be from_utf8'd: {}", e);
+            String::default()
+        }
+    };
+    buffer.clear();
+
+    res.push_str(&res_custom);
+    return res;
 }
 
 #[instrument(level = "debug", skip(ws, app_state))]
@@ -165,6 +238,8 @@ async fn handle_socket(
                     Ok(server) => {
                         tracing::info!("created new game server: {:?}", server);
                         game_id = server_list.add(server);
+                        // add server to metrics
+                        CONNECTED_GAME_SERVERS.inc();
                     }
                     Err(e) => {
                         tracing::error!("{:?}", e);
@@ -230,9 +305,15 @@ fn is_local_ipv4(ip: IpAddr) -> bool {
 
 fn remove_server(mut server_list: ServerList, game_id: &Uuid) {
     match server_list.remove(game_id) {
-        Some(entry) => tracing::info!("deleted game server: {:?}", entry),
+        Some(entry) => {
+            // remove players from metrics
+            IN_GAME_PLAYERS.set(IN_GAME_PLAYERS.get() - i64::from(entry.players));
+            tracing::info!("deleted game server: {:?}", entry)
+        }
         None => tracing::error!("failed to remove game server with id: {:?}", game_id),
     }
+    // remove server from metrics
+    CONNECTED_GAME_SERVERS.dec();
 }
 
 fn parse_connect_message(txt: String, ip: IpAddr, server_ip: IpAddr) -> Result<GameServer, String> {
@@ -283,6 +364,9 @@ fn parse_game_message(server_list: &ServerList, server_id: &Uuid, msg: &str) {
         match json {
             GameMessage::Status { players } => {
                 server_list.update(server_id, |game_server| {
+                    // calculate player count difference to update metrics
+                    let player_diff: i64 = i64::from(players) - i64::from(game_server.players);
+                    IN_GAME_PLAYERS.set(IN_GAME_PLAYERS.get() + player_diff);
                     game_server.players = players;
                     tracing::info!("updated player count of server: {:?}", game_server);
                 });
